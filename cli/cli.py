@@ -1,11 +1,20 @@
 import sys
-from enum import Enum
+from enum import Enum, auto
+from collections import defaultdict
 
 
 class SuperChar:
+    special_meaning_when_escaped = 'ntvr \\\'"'
+
     def __init__(self, char, is_escaped = False):
         self.char = char
         self.is_escaped = is_escaped
+
+    def __repr__(self):
+        if self.is_escaped:
+            return f'\\{self.char}'
+        else:
+            return self.char
 
     def isspace(self):
         return not self.is_escaped and self.char.isspace()
@@ -28,21 +37,38 @@ class SuperChar:
     def isspecial(self):
         return self.isspace() or self.isquotequotepipe()
 
+    def isdollar(self):
+        return not self.is_escaped and self.char == '$'
+
+    def isidchar(self):
+        if self.is_escaped and self.char in SuperChar.special_meaning_when_escaped:
+            return False
+        return self.char.isalnum() or self.char == '_'
+
+    def isidfirstchar(self):
+        if self.is_escaped and self.char in SuperChar.special_meaning_when_escaped:
+            return False
+        return self.char.isalpha() or self.char == '_'
+
+
 class Interpreter:
     class Command:
-        def __init__(self, name, arguments, stdin):
-            pass
+        def __init__(self, name=None, arguments=None, stdin=None, next_command=None):
+            self.name = name
+            self.arguments = arguments
+            self.stdin = stdin
+            self.next_command = next_command
 
         def run(self):
             pass
 
-    def __init__(self):
-        self.dict = dict()
+    def __init__(self, dict=None):
+        self.dict = defaultdict(str)
 
     class QuoteState(Enum):
-        OUTSIDE_QUOTES = 0,
-        INSIDE_SINGLE = 1,
-        INSIDE_DOUBLE = 2
+        OUTSIDE_QUOTES = auto()
+        INSIDE_SINGLE = auto()
+        INSIDE_DOUBLE = auto()
 
     @staticmethod
     def is_id_char(char):
@@ -54,7 +80,7 @@ class Interpreter:
 
     ESCAPE_CHARACTER = '\\'
 
-    def new_expand(self, line):
+    def translate_into_rich_line(self, line):
         # translate raw line into line with rich chars
         new_line = []
         state = self.QuoteState.OUTSIDE_QUOTES
@@ -77,9 +103,9 @@ class Interpreter:
             elif line[i] == '"' and self.QuoteState.INSIDE_DOUBLE:
                 state = self.QuoteState.OUTSIDE_QUOTES
 
-            new_line += SuperChar(line[i], is_escaped)
+            new_line.append(SuperChar(line[i], is_escaped))
             i += 1
-
+        return new_line
 
     def tokenize(self, line):
         # kind of 'split' by space, single quotes, double quotes, and pipe!
@@ -87,117 +113,120 @@ class Interpreter:
         state = self.QuoteState.OUTSIDE_QUOTES
         token = []
         i = 0
-        while i < len(line):
-            if not line[i].isspecial():
-                pass
 
-    # def tokenize(self, line):
-    #     # kind of 'split' by space, single quotes, and double quotes
-    #     tokens = []
-    #
-    #     i = 0
-    #     token = []
-    #     while i < len(line):
-    #         while i < len(line) and not line[i].isspecial():
-    #             token += line[i]
-    #             i += 1
-    #         if line[i].isspace():
-    #             tokens.append(token)
-    #             token = []
-    #         elif line[i].isdoublequote():
-    #             tokens.append(token)
-    #             token = [line[i]]
-    #             while i < len(line) and not line[i].isspecial():
-    #                 token += line[i]
-    #                 i += 1
-    #         elif line[i].ispipe():
-    #             tokens.append(token)
-    #             tokens.append(line[i])
-    #             token = []
-    #         while i < len(line) and line[i].isspace():
-    #             i += 1
-    #     tokens += token
+        def superchar_to_state(superchar):
+            if superchar.issinglequote():
+                return self.QuoteState.INSIDE_SINGLE
+            elif superchar.isdoublequote():
+                return self.QuoteState.INSIDE_DOUBLE
+            else:
+                raise Exception('The char is not a quote')
+
+        while i < len(line):
+            if state == self.QuoteState.OUTSIDE_QUOTES:
+                if line[i].ispipe():
+                    if token:
+                        tokens.append(token)
+                    tokens.append([line[i]])
+                    token = []
+                elif line[i].isquote():
+                    if token:
+                        tokens.append(token)
+                    token = [line[i]]
+                    state = superchar_to_state(line[i])
+                elif line[i].isspace():
+                    if token:
+                        tokens.append(token)
+                        token = []
+                    else:
+                        pass
+                else:
+                    token.append(line[i])
+            else:
+                token.append(line[i])
+                if line[i].isquote():
+                    state = self.QuoteState.OUTSIDE_QUOTES
+                    tokens.append(token)
+                    token = []
+            i += 1
+        if token:
+            tokens.append(token)
+        return tokens
+
+    def expand_identifiers(self, tokens):
+        new_tokens = []
+        for token in tokens:
+            new_tokens.append(self.expand_identifiers_in_token(token))
+        return new_tokens
+
+    def expand_identifiers_in_token(self, token):
+        class ExpState(Enum):
+            NOTHING = auto()
+            ATE_DOLLAR = auto()
+            EATING_ID = auto()
+
+        state = ExpState.NOTHING
+        i = 0
+        new_token = []
+        current_id = None
+        while i < len(token):
+            if state == ExpState.NOTHING:
+                if token[i].isdollar():
+                    state = ExpState.ATE_DOLLAR
+                    current_id = ''
+                else:
+                    new_token.append(token[i])
+            elif state == ExpState.ATE_DOLLAR:
+                if token[i].isidfirstchar():
+                    current_id += token[i].char
+                else:
+                    new_token.append(SuperChar('$'))
+                    current_id = None
+                    state = ExpState.NOTHING
+            elif state == ExpState.EATING_ID:
+                if token[i].isidchar():
+                    current_id += token[i].char
+                else:
+                    new_token.extend(map(SuperChar, self.dict[current_id]))
+                    current_id = None
+                    state = ExpState.NOTHING
+                    i -= 1
+            else:
+                raise Exception('Internal error: unknown state {}'.format(state))
+            i += 1
+        return new_token
 
     def parse(self, tokens):
-        pass
+        root_command = self.Command()
+        command = root_command
+        i = 0
+        while i < len(tokens):
+            if tokens[i][0].ispipe():
+                raise Exception('Syntax error near unexpected token |')
+            else:
+                command.name = tokens[i]
+                i += 1
+                command.arguments = []
+                while i < len(tokens) and not tokens[i][0].ispipe():
+                    command.arguments.append(tokens[i])
+                    i += 1
+                if i < len(tokens):  # then tokens[i] is a pipe
+                    command.next_command = self.Command()
+                    command = command.next_command
+                    i += 1
 
-
-
-
-
-
-    def expand(self, line):
-        """
-        Expand variables (identifiers preceded by the dollar sign $) outside of quotes
-        and inside of double quotes and do not expand outside of single quotes.
-
-        This preserves meaningless escapes. E.g. if a character without special meaning is escaped,
-        both the escape and the character get into the return string.
-
-        :param line: a line to expand variables in
-        :return: a line after one level of variable expansion (i.e. after one sweep)
-        """
-
-        new_line = ''
-        state = self.QuoteState.OUTSIDE_QUOTES
-        current_variable = None
-
-        line = list(line)
-        for prev_char, char, next_char in zip([None] + line, line, line[1:] + [None]):
-            # check if variable is over
-            if current_variable is not None:
-                if current_variable == '' and self.is_id_first_char(char)\
-                        or self.is_id_char(char):
-                    new_line += char
-                else:
-                    if current_variable == '':
-                        new_line += '$'
-                    else:
-                        new_line += self.dict[current_variable]
-                    current_variable = None
-
-            # check if variable starts
-            if char == '$':
-                if state == self.QuoteState.INSIDE_SINGLE:
-                    new_line += char
-                else:
-                    current_variable = ''
-                continue
-
-            new_line += char
-
-            if char == '\'':
-                if state == self.QuoteState.OUTSIDE_QUOTES:
-                    if prev_char != self.ESCAPE_CHARACTER:
-                        state = self.QuoteState.INSIDE_SINGLE
-                elif state == self.QuoteState.INSIDE_SINGLE:
-                    if prev_char != self.ESCAPE_CHARACTER:
-                        state = self.QuoteState.OUTSIDE_QUOTES
-                elif state == self.QuoteState.INSIDE_DOUBLE:
-                    pass
-            elif char == '"':
-                if state == self.QuoteState.OUTSIDE_QUOTES:
-                    if prev_char != self.ESCAPE_CHARACTER:
-                        state = self.QuoteState.INSIDE_DOUBLE
-                elif state == self.QuoteState.INSIDE_SINGLE:
-                    pass
-                elif state == self.QuoteState.INSIDE_DOUBLE:
-                    if prev_char != self.ESCAPE_CHARACTER:
-                        state = self.QuoteState.OUTSIDE_QUOTES
-
-        return new_line
-
-    def tokenize(self, line):
-        pass
-
-    def parse(self, line):
-        return []
+        return root_command
 
     def interpret(self, line):
-        line = self.expand(line)
-        command = self.parse(line)
-        command.run()
+        line = self.translate_into_rich_line(line)
         print(line)
+        return
+        line = self.tokenize(line)
+        print(line)
+        line = self.expand_identifiers(line)
+        print(line)
+        command = self.parse(line)
+        print(command)
 
 
 
@@ -205,10 +234,11 @@ class Interpreter:
 
 def main():
     interpreter = Interpreter()
-    line = input('> ')
-    while line:
-        line = input('> ')
-        interpreter.interpret(line)
+    interpreter.interpret('kukarek\\n\\\\')
+    # line = input('> ')
+    # while line:
+    #     line = input('> ')
+    #     interpreter.interpret(line)
 
 
 if __name__ == '__main__':
