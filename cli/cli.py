@@ -33,6 +33,9 @@ class SuperChar:
     def ispipe(self):
         return not self.is_escaped and self.char == '|'
 
+    def isequalsign(self):
+        return not self.is_escaped and self.char == '='
+
     def isquotequotepipe(self):
         return self.isquote() or self.ispipe()
 
@@ -98,6 +101,10 @@ class Interpreter:
         self.scope = scope if scope else defaultdict(str)
         self.handlers = handlers
 
+    @staticmethod
+    def token_to_str(token):
+        return ''.join(map(str, token))
+
     class QuoteState(Enum):
         OUTSIDE_QUOTES = auto()
         INSIDE_SINGLE = auto()
@@ -141,7 +148,7 @@ class Interpreter:
         return new_line
 
     def tokenize(self, line):
-        # kind of 'split' by space, single quotes, double quotes, and pipe!
+        # kind of 'split' by space, single & double quotes, pipe, and the = sign
         tokens = []
         state = self.QuoteState.OUTSIDE_QUOTES
         token = []
@@ -173,6 +180,11 @@ class Interpreter:
                         token = []
                     else:
                         pass
+                elif line[i].isequalsign():
+                    if token:
+                        tokens.append(token)
+                        token = []
+                    tokens.append([line[i]])
                 else:
                     token.append(line[i])
             else:
@@ -246,6 +258,12 @@ class Interpreter:
             if tokens[i][0].ispipe():
                 raise Exception('Syntax error near unexpected token |')
             else:
+                if i + 1 < len(tokens) and tokens[i + 1][0].isequalsign():
+                    if i + 2 >= len(tokens):
+                        raise Exception('Incorrect assignment: no right-hand-side expression')
+                    self.scope[self.token_to_str(tokens[i])] = self.token_to_str(tokens[i + 2])
+                    i += 3
+                    continue
                 command.name = tokens[i]
                 i += 1
                 command.arguments = []
@@ -256,14 +274,14 @@ class Interpreter:
                     command.next_command = self.Command(handlers=self.handlers)
                     command = command.next_command
                     i += 1
-        return root_command
+        return root_command if root_command.name else None
 
     def interpret(self, line):
         line = self.translate_into_rich_line(line)
         line = self.tokenize(line)
         line = self.expand_identifiers(line)
         command = self.parse(line)
-        return command.run()
+        return command.run() if command else ''
 
 
 def main():

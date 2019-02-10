@@ -60,13 +60,17 @@ class TokenizeTests(unittest.TestCase):
             '"foo" \\p',
             'echo "meow \\" meow"',
             'echo $foo\ bar \t\n\v\r"\\ foo bar" \\p | echo meow',
+            'foo=42',
+            'foo = 42',
         ]
         expected_lines = [
             'echo meow "cat'.split(),
             'echo one | echo two'.split(),
             '"foo" \\p'.split(),
             ['echo', '"meow \\" meow"'],
-            ['echo', '$foo\ bar', '"\\ foo bar"', '\\p', '|', 'echo', 'meow']
+            ['echo', '$foo\ bar', '"\\ foo bar"', '\\p', '|', 'echo', 'meow'],
+            ['foo', '=', '42'],
+            ['foo', '=', '42'],
         ]
 
         for line, expected_tokens in zip(lines, expected_lines):
@@ -129,6 +133,8 @@ class InterpreterTests(unittest.TestCase):
             'print_args 30 seconds': '30 seconds',
             'print_args': '',
             'echo $foo | echo': '',
+            'bar = 5': '',
+            'echo $bar': '5',
         }
         for line, expected in line_to_expected.items():
             actual = interpreter.interpret(line)
