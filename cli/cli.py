@@ -1,6 +1,8 @@
-import sys
+import subprocess
+
 from enum import Enum, auto
 from collections import defaultdict
+
 
 
 class SuperChar:
@@ -53,17 +55,46 @@ class SuperChar:
 
 class Interpreter:
     class Command:
-        def __init__(self, name=None, arguments=None, stdin=None, next_command=None):
+        def __init__(self, name=None, arguments=None, stdin=None, next_command=None,
+                     handlers=None):
             self.name = name
-            self.arguments = arguments
+            self.arguments = arguments if arguments else []
             self.stdin = stdin
             self.next_command = next_command
+            self.handlers = handlers
+            self.handler = None
+
+        @staticmethod
+        def token_to_str(token):
+            return ''.join(map(str, token))
+
+        def __repr__(self):
+            return f'Command({self.token_to_str(self.name)}, ' \
+                   f'[{", ".join(map(self.token_to_str, self.arguments))}], {self.stdin})' +\
+                   (f' | {self.next_command}' if self.next_command is not None else '')
 
         def run(self):
-            pass
+            if self.name and self.handlers:
+                raw_name = self.token_to_str(self.name)
+                if raw_name in self.handlers:
+                    self.handler = self.handlers[raw_name]
 
-    def __init__(self, dict=None):
-        self.dict = defaultdict(str)
+            if self.handler:
+                output = self.handler(list(map(self.token_to_str, self.arguments)), self.stdin)
+            else:
+                command = [self.token_to_str(self.name)]
+                for token in self.arguments:
+                    command.append(self.token_to_str(token))
+                output = subprocess.run(command, capture_output=True).stdout
+                output = output.decode()
+            if self.next_command:
+                self.next_command.stdin = output
+                output = self.next_command.run()
+            return output
+
+    def __init__(self, scope=None, handlers=None):
+        self.scope = scope if scope else defaultdict(str)
+        self.handlers = handlers
 
     class QuoteState(Enum):
         OUTSIDE_QUOTES = auto()
@@ -160,6 +191,13 @@ class Interpreter:
         return new_tokens
 
     def expand_identifiers_in_token(self, token):
+        if token[0].char == "'":
+            quote_state = self.QuoteState.INSIDE_SINGLE
+        elif token[0].char == '"':
+            quote_state = self.QuoteState.INSIDE_DOUBLE
+        else:
+            quote_state = self.QuoteState.OUTSIDE_QUOTES
+
         class ExpState(Enum):
             NOTHING = auto()
             ATE_DOLLAR = auto()
@@ -171,7 +209,7 @@ class Interpreter:
         current_id = None
         while i < len(token):
             if state == ExpState.NOTHING:
-                if token[i].isdollar():
+                if token[i].isdollar() and quote_state != self.QuoteState.INSIDE_SINGLE:
                     state = ExpState.ATE_DOLLAR
                     current_id = ''
                 else:
@@ -179,25 +217,27 @@ class Interpreter:
             elif state == ExpState.ATE_DOLLAR:
                 if token[i].isidfirstchar():
                     current_id += token[i].char
+                    state = ExpState.EATING_ID
                 else:
-                    new_token.append(SuperChar('$'))
                     current_id = None
                     state = ExpState.NOTHING
             elif state == ExpState.EATING_ID:
                 if token[i].isidchar():
                     current_id += token[i].char
                 else:
-                    new_token.extend(map(SuperChar, self.dict[current_id]))
+                    new_token.extend(map(SuperChar, self.scope[current_id]))
                     current_id = None
                     state = ExpState.NOTHING
                     i -= 1
             else:
                 raise Exception('Internal error: unknown state {}'.format(state))
             i += 1
+        if state == ExpState.EATING_ID:
+            new_token.extend(map(SuperChar, self.scope[current_id]))
         return new_token
 
     def parse(self, tokens):
-        root_command = self.Command()
+        root_command = self.Command(handlers=self.handlers)
         command = root_command
         i = 0
         while i < len(tokens):
@@ -211,34 +251,26 @@ class Interpreter:
                     command.arguments.append(tokens[i])
                     i += 1
                 if i < len(tokens):  # then tokens[i] is a pipe
-                    command.next_command = self.Command()
+                    command.next_command = self.Command(handlers=self.handlers)
                     command = command.next_command
                     i += 1
-
         return root_command
 
     def interpret(self, line):
         line = self.translate_into_rich_line(line)
-        print(line)
-        return
         line = self.tokenize(line)
-        print(line)
         line = self.expand_identifiers(line)
-        print(line)
         command = self.parse(line)
-        print(command)
-
-
-
+        return command.run()
 
 
 def main():
     interpreter = Interpreter()
-    interpreter.interpret('kukarek\\n\\\\')
-    # line = input('> ')
-    # while line:
-    #     line = input('> ')
-    #     interpreter.interpret(line)
+    line = input('> ')
+    while line:
+        line = input('> ')
+        output = interpreter.interpret(line)
+        print(output)
 
 
 if __name__ == '__main__':
