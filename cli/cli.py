@@ -74,6 +74,8 @@ class Interpreter:
                    (f' | {self.next_command}' if self.next_command is not None else '')
 
         def run(self):
+            if self.token_to_str(self.name) == 'exit':
+                raise Exception('Exit')
             if self.name and self.handlers:
                 raw_name = self.token_to_str(self.name)
                 if raw_name in self.handlers:
