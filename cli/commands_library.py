@@ -36,3 +36,8 @@ class WcCommand(RunnableCommand):
 class PwdCommand(RunnableCommand):
     def run(self):
         return os.getcwd()
+
+
+class GrepCommand(RunnableCommand):
+    def run(self):
+        pass
