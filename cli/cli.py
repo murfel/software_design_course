@@ -286,11 +286,12 @@ class Interpreter:
 
 def main():
     interpreter = Interpreter()
-    line = input('> ')
+    line = True
     while line:
         line = input('> ')
         output = interpreter.interpret(line)
-        print(output)
+        print(output.strip())
+
 
 
 if __name__ == '__main__':
